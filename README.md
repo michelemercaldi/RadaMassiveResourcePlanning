@@ -5,12 +5,24 @@
 
 the directory `pmas_web` contains a simple web interface to run the PMAS simulation.
 
-### Installation
+### Installation in Python environment
 
-This project uses Poetry for dependency management. To install the required packages, run the following command from the project's root directory (`/mnt/c/Users/m.mercaldi/radarepos/gurobi/pianificazione`):
+This project uses Poetry for dependency management. 
+
+Use Python 3.9.9 for compatibility with previous gurobi project. 
 
 ```bash
+python -m venv .venv
+# C:\Users\m.mercaldi\AppData\Local\Programs\Python\Python39\python -m venv .venv
+.\.venv\Scripts\activate
 poetry install
+#pip install cx_Oracle    # poetry add cx_Oracle
+#pip install uvicorn      # poetry add uvicorn
+#pip install fastapi      # poetry add fastapi
+```
+
+```bash
+poetry add fastapi "uvicorn[standard]"
 ```
 
 If you have already installed the dependencies for the main project, you may just need to add the web-specific ones:
@@ -22,9 +34,14 @@ uvicorn
 cx_Oracle
 ```
 
+or with pip
 ```bash
-poetry add fastapi "uvicorn[standard]"
+.\.venv.tp\Scripts\activate
+pip install cx_Oracle    # poetry add cx_Oracle
+pip install uvicorn      # poetry add uvicorn
+pip install fastapi      # poetry add fastapi
 ```
+
 
 
 ### Running the Server
@@ -34,6 +51,11 @@ for this new sub-project run the following command from `pianificazione` subdir
 
 ```bash
 poetry run uvicorn pmas_web.server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+or
+```bash
+python -m uvicorn pmas_web.server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 You can then access the web interface by opening your browser and navigating to [http://127.0.0.1:8000](http://127.0.0.1:8000).

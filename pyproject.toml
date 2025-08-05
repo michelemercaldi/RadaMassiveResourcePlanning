@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "RadaMassiveResourcePlanning"
+version = "0.1.1"
+description = "API used for massive ebom planning of Alstom"
+authors = ["Michele Mercaldi <michele.mercaldi@gmail.com>"]
+license = "Proprietary"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "3.9.9"
+fastapi = {extras = ["all"], version = "^0.70.0"}
+cx-Oracle = "^8.3.0"
+pandas = "1.4.1"
+plotly = "5.23.0"
+uvicorn = "0.15.0"
+numpy = "1.22.2"
+pulp = "2.6.0"
+flask = "^3.1.1"
+python-dotenv = "^1.1.1"
+
+
+[tool.poetry.dev-dependencies]
+sqlacodegen = "3.0.0b2"
+openpyxl = "3.1.5"
+tbump = "6.11.0"
+matplotlib = "3.8.4"
+pre-commit = "^4.2.0"
+isort = "5.13.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

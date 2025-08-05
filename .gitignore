@@ -1,3 +1,5 @@
+secret
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -30,6 +32,7 @@ pip-delete-this-directory.txt
 # Virtual environments
 env/
 venv/
+.venv/
 ENV/
 env.bak/
 venv.bak/

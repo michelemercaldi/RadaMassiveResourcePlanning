@@ -26,8 +26,7 @@ async def startup_event():
     """Code to run on application startup."""
     try:
         conf = PmasConfiguration()
-        
-        log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+        log_dir = os.path.join(os.path.dirname(__file__), '../logs')
         os.makedirs(log_dir, exist_ok=True)
         conf.log_file_path = os.path.join(log_dir, 'pmas_web.log')
 
@@ -58,7 +57,7 @@ async def shutdown_event():
 
 @app.get("/api/logs")
 async def get_logs(request: Request):
-    log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', 'pmas_web.log')
+    log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../logs', 'pmas_web.log')
     
     # Support range requests for tailing
     range_header = request.headers.get('Range')

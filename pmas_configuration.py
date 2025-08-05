@@ -36,6 +36,21 @@ class PmasConfiguration:
     # --------- CONSTANTS end --------- #
 
 
+    def __init__(self):
+        try:
+            # Load database credentials from 'secret' file
+            with open("secret", "r") as f:
+                lines = f.readlines()
+                if len(lines) < 2:
+                    raise ValueError("The 'secret' file must contain at least two lines (username and password).")
+                username = lines[0].strip()
+                password = lines[1].strip()
+                self.sql_connection_params["username"] = username
+                self.sql_connection_params["password"] = password
+        except Exception as e:
+            logging.error(f"Failed to load database credentials from 'secret': {e}")
+            raise
+
 
 
     # --------- USER INPUT --------- #
@@ -95,7 +110,6 @@ class PmasConfiguration:
     debug__force_mbom_workers_on_single_simulation = 5
     debug__force_production_workers_on_single_simulation = 11
     # --------- only for debug - end --------- #
-
 
 
     def update_config_with_user_input(self, user_input):
