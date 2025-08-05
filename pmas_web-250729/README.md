@@ -1,11 +1,8 @@
-# RadaMassiveResourcePlanning
+# PMAS Simulation Web Interface
 
+This directory contains a simple web interface to run the PMAS simulation.
 
-## PMAS Simulation Web Interface
-
-the directory `pmas_web` contains a simple web interface to run the PMAS simulation.
-
-### Installation
+## Installation
 
 This project uses Poetry for dependency management. To install the required packages, run the following command from the project's root directory (`/mnt/c/Users/m.mercaldi/radarepos/gurobi/pianificazione`):
 
@@ -27,7 +24,7 @@ poetry add fastapi "uvicorn[standard]"
 ```
 
 
-### Running the Server
+## Running the Server
 
 To run the web server with automatic reloading (the server will restart whenever you change a file), execute the following command from the project's root directory,
 for this new sub-project run the following command from `pianificazione` subdir
@@ -44,14 +41,6 @@ You can then access the web interface by opening your browser and navigating to 
 
 
 
-## PMAS Simulation cli
-The script `pianificazione_massiva.py` can be used to run project from CLI
-simulating the user input, the simulated user input is in configuration.
-Run with
-
-```bash
-.\.venv\Scripts\python.exe .\pianificazione_massiva.py
-```
 
 
 
@@ -60,7 +49,7 @@ Run with
 
 ---
 
-### sql util
+# sql util
 ```sql
 
 -----------------

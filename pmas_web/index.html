@@ -1,0 +1,464 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Massive Planning Simulation</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 2em;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        .main-content {
+            display: flex;
+            flex: 1;
+            gap: 2em;
+        }
+        .left-column {
+            flex: 1;
+            min-width: 400px; /* Adjust as needed */
+        }
+        .right-column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        #simulation_output {
+            width: 100%;
+            flex: 1;
+            min-height: 300px; /* Minimum height for the textarea */
+            resize: vertical; /* Allow vertical resizing */
+        }
+        .form-group {
+            margin-bottom: 1em;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5em;
+        }
+        input, select {
+            width: 100%;
+            padding: 0.5em;
+            box-sizing: border-box;
+        }
+        .small-input {
+            width: 80px; /* Adjust as needed */
+            display: inline-block;
+        }
+        .form-group-inline {
+            display: inline-block;
+            margin-right: 1em;
+        }
+        .shifts-container, .casse-container, .costs-and-offsets-group {
+            border: 1px solid #ccc;
+            padding: 1em;
+            margin-bottom: 1em;
+        }
+        .cost-container, .offset-container {
+            border: none; /* Remove inner borders */
+            padding: 0; /* Remove inner padding */
+            margin-bottom: 1em; /* Add some space between inner boxes */
+        }
+        .shift, .cassa {
+            display: flex;
+            gap: 1em;
+            margin-bottom: 0.5em;
+        }
+    </style>
+</head>
+<body>
+    <h1>Massive Planning Simulation</h1>
+
+    <div class="main-content">
+        <div class="left-column">
+            <div class="form-group">
+                <label for="id_progetto">ID Progetto</label>
+                <input type="number" id="id_progetto" value="71">
+                <button id="get_casse">Get Casse</button>
+            </div>
+
+            <div class="casse-container">
+                <h2>Casse Production Dates</h2>
+                <div id="casse"></div>
+            </div>
+
+            <div class="shifts-container">
+                <h2>Shifts</h2>
+                <div class="form-group">
+                    <label for="num_shifts">Number of Shifts</label>
+                    <select id="num_shifts">
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                    </select>
+                </div>
+                <div id="shifts"></div>
+            </div>
+
+            <div class="form-group">
+                <label for="multiplier_ebom_to_dtr">Multiplier EBOM to DTR</label>
+                <input type="number" id="multiplier_ebom_to_dtr" value="3">
+            </div>
+
+            <div class="form-group">
+                <label for="family_skill">Family Skill</label>
+                <input type="text" id="family_skill" value="">
+            </div>
+
+            <div class="costs-and-offsets-group">
+                <div class="cost-container">
+                    <h2>Hourly Costs</h2>
+                    <div class="form-group-inline">
+                        <label for="hourly_cost_mbom">MBOM Cost</label>
+                        <input type="number" id="hourly_cost_mbom" value="1" class="small-input">
+                    </div>
+                    <div class="form-group-inline">
+                        <label for="hourly_cost_workinstruction">Work Instruction Cost</label>
+                        <input type="number" id="hourly_cost_workinstruction" value="40" class="small-input">
+                    </div>
+                    <div class="form-group-inline">
+                        <label for="hourly_cost_routing">Routing Cost</label>
+                        <input type="number" id="hourly_cost_routing" value="2" class="small-input">
+                    </div>
+                </div>
+
+                <div class="offset-container">
+                    <h2>Offsets (Days)</h2>
+                    <div class="form-group-inline">
+                        <label for="offset_mbom">MBOM Offset</label>
+                        <input type="number" id="offset_mbom" value="10" class="small-input">
+                    </div>
+                    <div class="form-group-inline">
+                        <label for="offset_workinstruction">Work Instruction Offset</label>
+                        <input type="number" id="offset_workinstruction" value="-20" class="small-input">
+                    </div>
+                    <div class="form-group-inline">
+                        <label for="offset_routing">Routing Offset</label>
+                        <input type="number" id="offset_routing" value="-5" class="small-input">
+                    </div>
+                </div>
+                <button id="get_default_costs">Get Default Costs and Offset</button>
+            </div>
+
+            <br><hr><br>
+
+            <button id="review_inputs">Review Inputs</button>
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+            <button id="run_simulation"><h3>Run Simulation</h3></button>
+
+            <div id="review_output" style="white-space: pre-wrap; font-family: monospace; margin-top: 1em;"></div>
+        </div>
+
+        <div class="right-column">
+            <h2>Simulation Output</h2>
+            <div class="log-controls">
+                <button id="pause_log">Pause</button>
+                <button id="clear_log">Clear</button>
+                <button id="download_log">Download</button>
+            </div>
+            <textarea id="simulation_output" rows="20" cols="80" readonly></textarea>
+        </div>
+    </div>
+
+    <script defer>
+        console.log("Script loaded");
+        document.addEventListener('DOMContentLoaded', () => {
+            const idProgettoInput = document.getElementById('id_progetto');
+            const getCasseButton = document.getElementById('get_casse');
+            const numShiftsSelect = document.getElementById('num_shifts');
+            const shiftsContainer = document.getElementById('shifts');
+            const casseContainer = document.getElementById('casse');
+            const runSimulationButton = document.getElementById('run_simulation');
+            const getDefaultCostsButton = document.getElementById('get_default_costs');
+            const simulationOutputTextarea = document.getElementById('simulation_output');
+
+            // Log polling variables
+            let logPollingInterval = null;
+            let lastLogSize = 0;
+            let logPaused = false;
+            
+            // Initialize log textarea
+            simulationOutputTextarea.value = 'Log output will appear here...\n';
+    
+            const generateShifts = () => {
+                shiftsContainer.innerHTML = '';
+                const numShifts = parseInt(numShiftsSelect.value);
+                const shiftTimeStart = ["06:00", "14:00", "20:00"];
+                for (let i = 1; i <= numShifts; i++) {
+                    const shiftDiv = document.createElement('div');
+                    shiftDiv.classList.add('shift');
+                    shiftDiv.innerHTML = `
+                        <label>Shift ${i}</label>
+                        <input type="time" id="shift_start_${i}" value="${shiftTimeStart[i-1]}">
+                        <input type="number" id="shift_duration_${i}" value="7.5" step="0.5">
+                    `;
+                    shiftsContainer.appendChild(shiftDiv);
+                }
+            };
+
+            getCasseButton.addEventListener('click', async () => {
+                const idProgetto = idProgettoInput.value;
+                if (!idProgetto) {
+                    alert('Please enter an ID Progetto');
+                    return;
+                }
+                try {
+                    const response = await fetch(`/api/casse/${idProgetto}`);
+                    const data = await response.json();
+                    casseContainer.innerHTML = '';
+                    // Get today's date in YYYY-MM-DD format
+                    const today = new Date();
+                    const formattedToday = today.toISOString().split('T')[0];
+                    data.casse.forEach(cassa => {
+                        const cassaDiv = document.createElement('div');
+                        cassaDiv.classList.add('cassa');
+                        cassaDiv.innerHTML = `
+                            <label>${cassa}</label>
+                            <input type="date" id="cassa_date_${cassa}" value="${formattedToday}">
+                        `;
+                        casseContainer.appendChild(cassaDiv);
+                    });
+                } catch (error) {
+                    console.error('Error fetching casse:', error);
+                    alert('Error fetching casse. See console for details.');
+                }
+            });
+
+            const reviewButton = document.getElementById('review_inputs');
+            const reviewOutput = document.getElementById('review_output');
+
+            const getSimulationData = () => {
+                const shifts = {};
+                const numShifts = parseInt(numShiftsSelect.value);
+                for (let i = 1; i <= numShifts; i++) {
+                    shifts[i] = {
+                        start: document.getElementById(`shift_start_${i}`).value,
+                        duration: parseFloat(document.getElementById(`shift_duration_${i}`).value)
+                    };
+                }
+
+                const casse_production_dates = {};
+                const casseElements = document.querySelectorAll('.cassa input[type="date"]');
+                casseElements.forEach(el => {
+                    const cassa = el.id.replace('cassa_date_', '');
+                    if (el.value) {
+                        // Convert yyyy-mm-dd to ISO string (yyyy-mm-ddT00:00:00Z)
+                        const dateObj = new Date(el.value);
+                        casse_production_dates[cassa] = dateObj.toISOString();
+                    } });
+
+                return {
+                    id_progetto: parseInt(idProgettoInput.value),
+                    shifts: shifts,
+                    casse_production_dates: casse_production_dates,
+                    multiplier_ebom_to_dtr: parseInt(document.getElementById('multiplier_ebom_to_dtr').value),
+                    family_skill: document.getElementById('family_skill').value,
+                    hourly_cost_mbom: parseInt(document.getElementById('hourly_cost_mbom').value),
+                    hourly_cost_workinstruction: parseInt(document.getElementById('hourly_cost_workinstruction').value),
+                    hourly_cost_routing: parseInt(document.getElementById('hourly_cost_routing').value),
+                    offset_mbom: parseInt(document.getElementById('offset_mbom').value),
+                    offset_workinstruction: parseInt(document.getElementById('offset_workinstruction').value),
+                    offset_routing: parseInt(document.getElementById('offset_routing').value)
+                };
+            };
+
+            reviewButton.addEventListener('click', async () => {
+                const simulationData = getSimulationData();
+                try {
+                    //console.log(simulationData);
+                    const response = await fetch('/api/review_inputs', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(simulationData)
+                    });
+                    const result = await response.json();
+                    if (response.ok) {
+                        reviewOutput.textContent = JSON.stringify(result, null, 2);
+                    } else {
+                        alert(`Error: ${result.detail}`);
+                    }
+                } catch (error) {
+                    console.error('Error reviewing inputs:', error);
+                    alert('Error reviewing inputs. See console for details.');
+                }
+            });
+
+            const startLogPolling = () => {
+                if (logPollingInterval) clearInterval(logPollingInterval);
+
+                lastLogSize = 0; // Reset on new simulation
+                simulationOutputTextarea.value = 'Starting simulation...\n';
+
+                logPollingInterval = setInterval(async () => {
+                    try {
+                        console.log("Polling for logs...");
+                        const response = await fetch('/api/logs');
+                        console.log("Response status:", response.status);
+
+                        if (response.ok) {
+                            const logs = await response.text();
+                            console.log("Received log data length:", logs.length);
+                            console.log("Current lastLogSize:", lastLogSize);
+
+                            // Only append new content
+                            if (logs.length > lastLogSize) {
+                                const newContent = logs.substring(lastLogSize);
+                                console.log("Appending new content length:", newContent.length);
+                                simulationOutputTextarea.value += newContent;
+                                lastLogSize = logs.length;
+
+                                // Scroll to bottom if not paused
+                                if (!logPaused) {
+                                    simulationOutputTextarea.scrollTop = simulationOutputTextarea.scrollHeight;
+                                }
+                            }
+                        } else {
+                            console.error("Error fetching logs. Status:", response.status);
+                        }
+                    }
+                    catch (error) {
+                        console.error('Error fetching logs:', error);
+                    }
+                }, 3 * 1000); // poll every n seconds
+            };
+
+            // Add pause functionality
+            simulationOutputTextarea.addEventListener('click', () => {
+                logPaused = !logPaused;
+            });
+
+            const stopLogPolling = () => {
+                if (logPollingInterval) {
+                    clearInterval(logPollingInterval);
+                    logPollingInterval = null;
+                }
+            };
+
+            const pauseLogButton = document.getElementById('pause_log');
+            const clearLogButton = document.getElementById('clear_log');
+            const downloadLogButton = document.getElementById('download_log');
+
+            pauseLogButton.addEventListener('click', () => {
+                logPaused = !logPaused;
+                pauseLogButton.textContent = logPaused ? 'Resume' : 'Pause';
+                // Optional: Stop polling when paused to save resources
+                if (logPaused) {
+                    stopLogPolling();
+                } else {
+                    startLogPolling();
+                }
+            });
+
+            clearLogButton.addEventListener('click', () => {
+                simulationOutputTextarea.value = '';
+                lastLogSize = 0;
+                stopLogPolling(); // Stop current polling
+                startLogPolling(); // Restart to get fresh logs
+            });
+
+            downloadLogButton.addEventListener('click', () => {
+                const content = simulationOutputTextarea.value;
+                const blob = new Blob([content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'simulation_log.txt';
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }, 0);
+            });
+
+            const pollSimulationStatus = (taskId) => {
+                const intervalId = setInterval(async () => {
+                    try {
+                        const response = await fetch(`/api/simulation_status/${taskId}`);
+                        if (!response.ok) {
+                            clearInterval(intervalId);
+                            simulationOutputTextarea.value += `\nError polling for status: ${response.statusText}`;
+                            return;
+                        }
+                        
+                        const data = await response.json();
+
+                        if (data.status === 'completed') {
+                            clearInterval(intervalId);
+                            simulationOutputTextarea.value += `\n\n--- SIMULATION COMPLETE ---\n`;
+                            simulationOutputTextarea.value += JSON.stringify(data.result, null, 2);
+                            stopLogPolling();
+                        } else if (data.status === 'failed') {
+                            clearInterval(intervalId);
+                            simulationOutputTextarea.value += `\n\n--- SIMULATION FAILED ---\n`;
+                            simulationOutputTextarea.value += JSON.stringify(data.result, null, 2);
+                            stopLogPolling();
+                        }
+                    } catch (error) {
+                        clearInterval(intervalId);
+                        console.error('Error polling for simulation status:', error);
+                        simulationOutputTextarea.value += '\nError polling for simulation status.';
+                    }
+                }, 5000); // Poll every 5 seconds
+            };
+
+            runSimulationButton.addEventListener('click', async () => {
+                const simulationData = getSimulationData();
+                simulationOutputTextarea.value = 'Requesting simulation run...\n'; 
+                startLogPolling();
+
+                try {
+                    const response = await fetch('/api/run_simulation', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(simulationData)
+                    });
+                    
+                    const result = await response.json();
+
+                    if (response.status === 202) {
+                        simulationOutputTextarea.value += `Simulation started with Task ID: ${result.task_id}\n`;
+                        simulationOutputTextarea.value += 'Polling for result... (and streaming logs below)\n';
+                        pollSimulationStatus(result.task_id);
+                    } else {
+                        simulationOutputTextarea.value += `\nError starting simulation: ${result.detail}`;
+                        alert(`Error: ${result.detail}`);
+                        stopLogPolling();
+                    }
+                } catch (error) {
+                    console.error('Error starting simulation:', error);
+                    simulationOutputTextarea.value += `\nError starting simulation: ${error.message}`;
+                    alert('Error starting simulation. See console for details.');
+                    stopLogPolling();
+                }
+            });
+
+            getDefaultCostsButton.addEventListener('click', async () => {
+                try {
+                    const response = await fetch('/api/get_default_costs');
+                    const data = await response.json();
+                    document.getElementById('hourly_cost_mbom').value = data.mbom.COSTOUNITARIOH;
+                    document.getElementById('hourly_cost_workinstruction').value = data.workinstruction.COSTOUNITARIOH;
+                    document.getElementById('hourly_cost_routing').value = data.routing.COSTOUNITARIOH;
+                    document.getElementById('offset_mbom').value = data.mbom.OFFSET;
+                    document.getElementById('offset_workinstruction').value = data.workinstruction.OFFSET;
+                    document.getElementById('offset_routing').value = data.routing.OFFSET;
+                } catch (error) {
+                    console.error('Error fetching default costs:', error);
+                    alert('Error fetching default costs. See console for details.');
+                }
+            });
+
+            numShiftsSelect.addEventListener('change', generateShifts);
+            generateShifts(); // Initial generation
+        });
+    </script>
+</body>
+</html>
