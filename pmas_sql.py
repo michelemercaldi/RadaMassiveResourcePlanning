@@ -4,13 +4,10 @@ from pmas_configuration import PmasConfiguration
 from pmas_util import PmasLoggerSingleton
 import hashlib
 import datetime
+import threading
 
 conf: PmasConfiguration = None
 glog: PmasLoggerSingleton = None
-db = None
-dbcache = {}
-# _mme  ......... rimuovi dbcache
-dbcacheenabled = False # _mme review 
 
 
 
@@ -36,12 +33,6 @@ class PmasOracleDBClient:
         glog.debug("Params: %s", params)
         
         query_hash = hashlib.sha256(query.encode('utf-8')).hexdigest()
-        # Check cache: valid for 10 minutes
-        if dbcacheenabled and query_hash in dbcache:
-            entry = dbcache[query_hash]
-            if (datetime.datetime.now() - entry['date']).total_seconds() < 600 and entry['params'] == params:
-                glog.info(f"_mme get result from db cache")
-                return entry['result']
         
         cursor = self.connection.cursor()
         try:
@@ -51,12 +42,6 @@ class PmasOracleDBClient:
             rows = cursor.fetchall()
             glog.debug("Row count: %d", len(rows))
             result = [dict(zip(columns, row)) for row in rows]
-            if dbcacheenabled:
-                dbcache[query_hash] = {
-                    'result': result,
-                    'date': datetime.datetime.now(),
-                    'params': params
-                }
             return result
         except cx_Oracle.DatabaseError as e:
             error, = e.args
@@ -72,26 +57,55 @@ class PmasOracleDBClient:
 
 
 class PmasSql:
+    db: PmasOracleDBClient = None
+    # Close the DB connection after a period of inactivity (idle timeout)
+    _db_idle_timeout_seconds = 600  # 10 minutes
+    _db_idle_timer = None
+
     def __init__(self, pconf):
-        global conf, glog, db
+        global conf, glog
         glog = PmasLoggerSingleton.get_logger()
         conf = pconf
-        db = None
+        self.db = None
 
     def start(self):
-        global db
-        db = PmasOracleDBClient(
+        self.db = PmasOracleDBClient(
             host=conf.sql_connection_params["host"],
             port=conf.sql_connection_params["port"],
             service_name=conf.sql_connection_params["service_name"],
             username=conf.sql_connection_params["username"],
             password=conf.sql_connection_params["password"]
         )
-        
+        self._reset_db_idle_timer()
+
+    def _reset_db_idle_timer(self):
+        if self._db_idle_timer:
+            self._db_idle_timer.cancel()
+        self._db_idle_timer = threading.Timer(self._db_idle_timeout_seconds, self.end)
+        self._db_idle_timer.daemon = True
+        self._db_idle_timer.start()
+
     def end(self):
-        global db
-        db.close()
-        db = None
+        if self.db:
+            self.db.close()
+            self.db = None
+        if self._db_idle_timer:
+            self._db_idle_timer.cancel()
+            self._db_idle_timer = None
+
+
+    def getDb(self):
+        if not self.db:
+            self.start()
+        # reset timer after every access to db
+        self._reset_db_idle_timer()
+        return self.db
+
+
+    def getDb(self):
+        if self.db is None:
+            self.start()
+        return self.db
 
 
     # casse per project
@@ -105,7 +119,7 @@ class PmasSql:
             where an.idcommessa = :idprogetto
             order by ap.veicolocassa
         """
-        result = db.execute_query(query, {"idprogetto": idprogetto})
+        result = self.getDb().execute_query(query, {"idprogetto": idprogetto})
         for row in result:
             glog.debug(" > Row: %s", row)
         return [row['VEICOLOCASSA'] for row in result]
@@ -120,7 +134,7 @@ class PmasSql:
             GREATEST(OFFSETENG, OFFSETPROD ) as OFFSET
             from RST_ATTIVITAWL where Descrizione in ('M-BOM', 'WORK INSTRUCTION', 'ROUTING')
         """
-        result = db.execute_query(query)
+        result = self.getDb().execute_query(query)
         ret = {}
         for row in result:
             #glog.info("Row: %s", row)
@@ -144,7 +158,7 @@ class PmasSql:
                 WHERE idcommessa = :idprogetto
             ) select distinct partnbr from all_ebom_lastrev
         """
-        result = db.execute_query(query, {"idprogetto": idprogetto})
+        result = self.getDb().execute_query(query, {"idprogetto": idprogetto})
         for row in result:
             glog.debug(" > Row: %s", row)
         return [row['PARTNBR'] for row in result]
@@ -157,7 +171,7 @@ class PmasSql:
             select max(nvl(datarilasciofinale, dataprevistarilasciofinale)) as maxDataRilascio
             FROM rst_anagraficheebom WHERE idcommessa = :idprogetto
         """
-        result = db.execute_query(query, {"idprogetto": idprogetto})
+        result = self.getDb().execute_query(query, {"idprogetto": idprogetto})
         for row in result:
             glog.debug(" > Row: %s", row)
         return result
@@ -198,7 +212,7 @@ class PmasSql:
             order by partnbr, veicolocassa
         """  # _mme togli condizione su datarilascio e metti controlli su date produzione non valide immesse da utente
         # _mme   ........... togli condizione su datarilascio
-        result = db.execute_query(query, {"idprogetto": idprogetto})
+        result = self.getDb().execute_query(query, {"idprogetto": idprogetto})
         for row in result:
             glog.debug(" > Row: %s", row)
         return result
@@ -214,7 +228,7 @@ class PmasSql:
             where a.idcommessa = :idprogetto
             order by partnbr
         """
-        result = db.execute_query(query, {"idprogetto": idprogetto})
+        result = self.getDb().execute_query(query, {"idprogetto": idprogetto})
         for row in result:
             glog.debug(" > Row: %s", row)
         return result

@@ -8,18 +8,39 @@ from typing import Dict
 # Add parent directory to path to allow imports of pmas modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, HTTPException, Request, Response, Response
+from fastapi import FastAPI, HTTPException, Request, Response, Response, BackgroundTasks
 from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
+import asyncio, uuid
 
 from pmas_configuration import PmasConfiguration
 from pmas_sql import PmasSql
 from pmas_strategy import PmasStrategy
-from pmas_util import PmasLoggerSingleton
+from pmas_util import PmasLoggerSingleton, PmasLogBroker
 
 
 
 app = FastAPI()
+
+# _mme  uses QUEUES directly;
+# _mme     QUEUES: dict[str, asyncio.Queue[str]] = {}
+
+# Allow frontend on port 3000
+origins = [
+    "http://localhost:3000",
+    # Add more allowed origins here (like production URL)
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -32,6 +53,7 @@ async def startup_event():
 
         # Initialize and store logger, sql client, and config in app.state
         app.state.glog = PmasLoggerSingleton.get_logger(conf)
+        app.state.log_broker = PmasLogBroker(maxsize=2000)
         app.state.sql = PmasSql(conf)
         app.state.conf = conf
         app.state.simulations = {}
@@ -46,6 +68,7 @@ async def startup_event():
         app.state.glog = None
         app.state.sql = None
         app.state.conf = None
+        app.state.log_broker = None
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -186,26 +209,6 @@ def run_simulation_logic_threaded(task_id: str, app_state, user_input_data: dict
         app_state.glog.error(traceback.format_exc())
         app_state.simulations[task_id] = {"status": "failed", "result": {"detail": error_message}}
 
-@app.post("/api/run_simulation")
-def run_simulation(data: SimulationInput, request: Request):
-    """Runs the simulation with the provided input data."""
-    glog = request.app.state.glog
-    if not glog:
-        raise HTTPException(status_code=503, detail="Application is not initialized correctly. Check server logs.")
-
-    task_id = str(uuid.uuid4())
-    request.app.state.simulations[task_id] = {"status": "running", "result": None}
-    
-    web_user_input = data.dict()
-    user_input = transform_web_input_to_simulator_format(web_user_input)
-    
-    glog.info(f"Queuing simulation task {task_id} with input: {user_input}")
-
-    thread = threading.Thread(target=run_simulation_logic_threaded, args=(task_id, request.app.state, user_input))
-    thread.start()
-
-    return Response(status_code=202, content=f'{{"message": "Simulation started", "task_id": "{task_id}"}}', media_type="application/json")
-
 
 def transform_web_input_to_simulator_format(web_input):
     transformed = {
@@ -234,6 +237,151 @@ def transform_web_input_to_simulator_format(web_input):
         transformed['casse_production_dates'][cassa] = date_obj.strftime('%Y-%m-%d')
     
     return transformed
+
+
+
+#  _mme ori with actual simulation run:
+#@app.post("/api/run_simulation")
+#def run_simulation(data: SimulationInput, request: Request):
+#    """Runs the simulation with the provided input data."""
+#    glog = request.app.state.glog
+#    if not glog:
+#        raise HTTPException(status_code=503, detail="Application is not initialized correctly. Check server logs.")
+#
+#    task_id = str(uuid.uuid4())
+#    request.app.state.simulations[task_id] = {"status": "running", "result": None}
+#    
+#    web_user_input = data.dict()
+#    user_input = transform_web_input_to_simulator_format(web_user_input)
+#    
+#    glog.info(f"Queuing simulation task {task_id} with input: {user_input}")
+#
+#    thread = threading.Thread(target=run_simulation_logic_threaded, args=(task_id, request.app.state, user_input))
+#    thread.start()
+#
+#    return Response(status_code=202, content=f'{{"message": "Simulation started", "task_id": "{task_id}"}}', media_type="application/json")
+
+
+# _mme  run_simulation test that uses QUEUES directly,
+#    without the instance of the custom log broker
+# with_QUEUES : @app.post("/api/run_simulation")
+# with_QUEUES : async def run_simulation(payload: dict, background: BackgroundTasks):
+# with_QUEUES :     job_id = uuid.uuid4().hex
+# with_QUEUES :     QUEUES[job_id] = asyncio.Queue(maxsize=1000)
+# with_QUEUES :     await app.state.log_broker.ensure(job_id)
+# with_QUEUES :     background.add_task(simulation_task, job_id, payload)
+# with_QUEUES :     return {"job_id": job_id}
+
+
+@app.post("/api/run_simulation")
+async def run_simulation(payload: dict, background: BackgroundTasks):
+    job_id = uuid.uuid4().hex
+    await app.state.log_broker.ensure(job_id)
+    background.add_task(simulation_task, job_id, app.state.log_broker, payload)
+    return {"job_id": job_id}
+
+
+# _mme  simulation_task that uses QUEUES directly,
+# with_QUEUES : async def simulation_task(job_id: str, payload: dict):
+# with_QUEUES :     q = QUEUES[job_id]
+# with_QUEUES :     try:
+# with_QUEUES :         # emit logs while working
+# with_QUEUES :         for i in range(100):
+# with_QUEUES :             await q.put(f"[{i}] working with {payload.get('id_progetto')}")
+# with_QUEUES :             await asyncio.sleep(0.5)
+# with_QUEUES :         await q.put("__DONE__")
+# with_QUEUES :     finally:
+# with_QUEUES :         await asyncio.sleep(0)  # let last message flush
+
+
+# test simulation_task,   just write some logs to for the client
+async def simulation_task(job_id: str, broker: PmasLogBroker, payload: dict):
+    try:
+        # emit logs while working
+        await broker.put(job_id, "starting…")
+        for i in range(30):
+            await broker.put(job_id, f"[{i}] working with {payload.get('id_progetto')}")
+            app.state.glog.info(f"[{job_id}] working with {payload.get('id_progetto')}")
+            await asyncio.sleep(0.5)
+    finally:
+        await broker.done(job_id)  # send the "__DONE__" sentinel
+
+
+# _mme  stream_logs that uses QUEUES directly,
+#      without the instance of the custom log broker
+# with_QUEUES : @app.get("/api/run_simulation/{job_id}/logs")
+# with_QUEUES : async def stream_logs(job_id: str):
+# with_QUEUES :     q = QUEUES.get(job_id)
+# with_QUEUES :     if not q:
+# with_QUEUES :         async def _empty():
+# with_QUEUES :             yield {"event":"error","data":"unknown job"}
+# with_QUEUES :         return EventSourceResponse(_empty(), ping=15000)
+# with_QUEUES : 
+# with_QUEUES :     async def event_gen():
+# with_QUEUES :         try:
+# with_QUEUES :             while True:
+# with_QUEUES :                 line = await q.get()
+# with_QUEUES :                 if line == "__DONE__":
+# with_QUEUES :                     yield {"event":"done", "data":"ok"}
+# with_QUEUES :                     break
+# with_QUEUES :                 yield {"event":"log", "data": line}
+# with_QUEUES :         finally:
+# with_QUEUES :             QUEUES.pop(job_id, None)
+# with_QUEUES :     return EventSourceResponse(event_gen(), ping=15000)  # keep-alive pings
+
+
+@app.get("/api/run_simulation/{job_id}/logs")
+async def stream_logs(job_id: str):
+    q = app.state.log_broker.get(job_id)
+    if not q:
+        async def _empty():
+            yield {"event":"error","data":"unknown job"}
+        return EventSourceResponse(_empty(), ping=15000)
+
+    async def event_gen():
+        try:
+            while True:
+                line = await q.get()
+                if line == "__DONE__":
+                    yield {"event":"done","data":"ok"}
+                    break
+                yield {"event":"log","data": line}
+        finally:
+            # delete only when you're SURE job is done
+            app.state.log_broker.pop(job_id)
+    return EventSourceResponse(event_gen(), ping=15000)
+
+
+#Now from any module you can write logs:
+#
+## some_module.py
+#async def step_x(job_id: str, broker: LogBroker):
+#    await broker.put(job_id, "step X started")
+#    # ...
+#
+#
+#If you don’t have easy access to app.state in deep modules, expose a tiny accessor:
+#
+## appctx.py
+#from typing import Optional
+#from broker import LogBroker
+#_broker: Optional[LogBroker] = None
+#def set_broker(b: LogBroker):  # call this in lifespan
+#    global _b; _b = b
+#def get_broker() -> LogBroker:
+#    assert _b is not None, "broker not initialized"
+#    return _b
+#
+#Then anywhere: await get_broker().put(job_id, "msg").
+#
+# Tip: if you log from threads, use loop.call_soon_threadsafe(q.put_nowait, line); 
+# or make your broker provide a put_threadsafe wrapper.
+
+
+
+
+
+
 
 
 # To run the server with auto-reload, use the following command from the project root:
