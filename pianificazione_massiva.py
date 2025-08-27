@@ -18,5 +18,5 @@ if __name__ == "__main__":
     glog.info(simulate_user_input)
     glog.info("---------------------\n")
 
-    strategy.exec_simulation_logic(simulate_user_input)
+    strategy.exec_simulation_logic(simulate_user_input, None)
 

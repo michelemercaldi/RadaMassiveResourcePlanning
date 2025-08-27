@@ -210,7 +210,8 @@ class PmasSql:
             from ebom_and_dates 
             where datarilascio > to_date('2022-01-01', 'YYYY-MM-DD') and datarilascio < to_date('2025-01-01', 'YYYY-MM-DD')
             order by partnbr, veicolocassa
-        """  # _mme togli condizione su datarilascio e metti controlli su date produzione non valide immesse da utente
+        """  
+        # _mme togli condizione su datarilascio e metti controlli su date produzione non valide immesse da utente
         # _mme   ........... togli condizione su datarilascio
         result = self.getDb().execute_query(query, {"idprogetto": idprogetto})
         for row in result:

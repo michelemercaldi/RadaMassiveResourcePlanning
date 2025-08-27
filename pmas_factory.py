@@ -37,24 +37,6 @@ class PmasFactory:
         return months
 
 
-    def assign_monthly_workers(self, months, mbom_deadline, mbom_workers, production_workers):
-        monthly_workers = {}
-        for (year, month) in months:
-            # first and last day of this month
-            month_start = datetime(year, month, 1)
-            if month == 12:
-                next_month = datetime(year + 1, 1, 1)
-            else:
-                next_month = datetime(year, month + 1, 1)
-            month_end = next_month - timedelta(days=1)
-
-            if month_start <= mbom_deadline:
-                monthly_workers[(year, month)] = int(math.ceil(mbom_workers))
-            else:
-                monthly_workers[(year, month)] = int(math.ceil(production_workers))
-        return monthly_workers
-
-
     def assign_monthly_workers_from_pulp_months(self, months):
         monthly_workers = {}
         for m in sorted(months.keys()):
@@ -313,7 +295,6 @@ class PmasFactory:
         end_date = last_shift_date.date()
         while current_date <= end_date:
             month_key = (current_date.year, current_date.month)
-            # _mme glog.info(month_key)
             for ebom in eboms:
                 eng_release_date = ebom['eng_release_date'].date()
                 production_date = ebom['production_date'].date()
@@ -371,5 +352,4 @@ class PmasFactory:
         for m in months:
             if months[m]['workers'] == 0:
                 months[m]['workers'] = 1
-            # months[m]['workers'] *= 100   # _mme  fake  assignement
 

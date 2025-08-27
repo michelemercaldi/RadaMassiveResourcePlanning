@@ -1,3 +1,4 @@
+import os
 import logging
 from datetime import datetime, timedelta
 
@@ -10,9 +11,18 @@ class PmasConfiguration:
     log_setup_level = logging.DEBUG    # Capture all logs at DEBUG level and above
     log_console_level = logging.INFO
     log_file_level = logging.DEBUG
-    log_file_path = 'logs\massive_planning.log'
 
-    max_simulation_attempts = 6  # Maximum number of simulation attempts to find a working configuration    _mme review
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_file_path = 'logs\massive_planning.log'
+    schedule_export_file_path = 'logs\massive_planning_schedule_export.csv'
+    status_file_path = 'logs\massive_planning_status.txt'
+
+    # worker must be saturated over a given threshold in every shift
+    # e.g., 0.9 means workers must be utilized at least 90% of the time during their shifts
+    worker_saturation_per_shift = 0.9
+
+    # Maximum number of simulation attempts to find a working configuration
+    max_simulation_attempts = 6
 
     ## ora11
     #sql_connection_params = {
@@ -38,6 +48,9 @@ class PmasConfiguration:
 
     def __init__(self):
         try:
+            log_dir = os.path.join(self.base_dir, 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+
             # Load database credentials from 'secret' file
             with open("secret", "r") as f:
                 lines = f.readlines()

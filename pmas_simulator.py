@@ -9,7 +9,7 @@ glog: PmasLoggerSingleton = None
 
 
 class PmasSimulator:
-    def __init__(self, pconf, eboms, shifts, monthly_workers):
+    def __init__(self, pconf, eboms, shifts, monthly_workers, weblog):
         global conf, glog
         glog = PmasLoggerSingleton.get_logger()
         conf = pconf
@@ -23,6 +23,7 @@ class PmasSimulator:
         self.current_workers = {}
         self.current_day = self.current_time.date()
         self.schedule_log = []  # list of dicts for CSV/Gantt
+        self.weblog = weblog  # PmasLogBroker for logging to web client
 
         # list of ebom phases available, all the phases still not completed
         # as for every ebom the phases must be executed in sequence only one phase is available for every ebom
@@ -42,14 +43,19 @@ class PmasSimulator:
         self.simulation_start_time = time.time()
         end_time = conf.START_DATE + timedelta(days=conf.ELAPSED_DAYS)
         glog.info("%s - 🕒 Simulation starts: %s", self.cts, format_time(self.current_time))
+        self.weblog("")
+        self.weblog("now we run the simulation to assign workers to EBOMs")
+        self.weblog(f"🕒 Simulation starts: {format_time(self.current_time)}")
         if __debug__: glog.info("%s - 🕒   expected end at: %s\n", self.cts, format_time(end_time))
 
         # Header for info output  (optional: only print once)
-        glog.info("{:<20} {:<15} {:>12} {:>10} {:>25}".format("⏱ Timestamp", "📅 Period", "Uncompleted EBOMs", "Workers", "Total h worked / remaining"))
-    
+        glog.info("{:<20} {:<15} {:>12} {:10} {:>20}".format("⏱ Timestamp", "📅 Period", "Uncompleted EBOMs", "Workers", "h worked / remaining"))
+        self.weblog("{:<15} {:10} {:>20}".format("📅 Period", "Workers", "h worked / remaining"))
+
         is_working_time = False
         current_shift_num = -1
         simulation_failed = False
+
 
         # =======================================
         # =====          main loop          =====
@@ -57,17 +63,21 @@ class PmasSimulator:
         while self.current_time <= end_time and not simulation_failed:
             if __debug__: glog.debug("\n%s - === ⏱️ Time Tick: %s ===", self.cts, format_time(self.current_time))
             self.current_day = self.current_time.date()
-            # _mme remove if not needed  worker_ids_on_closed_phase_in_this_tick = []
 
             # Log at the beginning of the month
             #if __debug__:
             if self.current_time.day == 1 and self.current_time.hour == 0 and self.current_time.minute == 0:
                 total_h_worked, total_h_remaining = self.get_total_h_worked_and_remaining()
-                # _mme ori glog.info("%s - 📅 %s  ... working ...  uncompleted eboms: %s,  workers: %d, total_h worked/remaining: %.2f / %.2f", self.cts, self.current_time.strftime('%B %Y'), len(self.get_uncompleted_eboms()), self.monthly_workers[(self.current_time.year, self.current_time.month)], total_h_worked, total_h_remaining)
-                glog.info("{:<20} {:<15} {:>12} {:>10} {:>12.2f} / {:<.2f}".format(
+                glog.info("{:<20} {:<15} {:>12} {:>10} {:>12.0f} / {:<.0f}".format(
                     self.cts,
                     self.current_time.strftime('%B %Y'),
                     len(self.get_uncompleted_eboms()),
+                    self.monthly_workers[(self.current_time.year, self.current_time.month)],
+                    total_h_worked,
+                    total_h_remaining
+                ))
+                self.weblog("{:<15} {:>10} {:>12.0f} / {:<.0f}".format(
+                    self.current_time.strftime('%B %Y'),
                     self.monthly_workers[(self.current_time.year, self.current_time.month)],
                     total_h_worked,
                     total_h_remaining
@@ -116,79 +126,6 @@ class PmasSimulator:
                     worker_id = self.get_first_available_worker_with_max_capacity(not_the_workers=busy_workers, current_shift_num=current_shift_num)
                     ebomid, phase = self.get_next_available_phase()
 
-
-
-                # _mme loop_on_all_ebom  ##################################
-                # _mme loop_on_all_ebom  for ebomid, phase in self.available_phases.items():
-                # _mme loop_on_all_ebom      if phase is None or self.current_time < phase["eng_release_date"]:
-                # _mme loop_on_all_ebom          continue
-                # _mme loop_on_all_ebom      worker_on_phase = None
-                # _mme loop_on_all_ebom      worker_id = phase['active_worker']
-                # _mme loop_on_all_ebom      # check if this phase is currently in progress
-                # _mme loop_on_all_ebom      if worker_id is not None:
-                # _mme loop_on_all_ebom          worker_on_phase = self.current_workers[worker_id]
-                # _mme loop_on_all_ebom          if not isinstance(worker_on_phase, Worker):
-                # _mme loop_on_all_ebom              glog.error("%s - Error, %s is not of class Workers", self.cts, worker_id)
-                # _mme loop_on_all_ebom              sys.exit(2)
-                # _mme loop_on_all_ebom          if phase['remaining_cost'] > 0:
-                # _mme loop_on_all_ebom              # decrease remaining cost for this phase
-                # _mme loop_on_all_ebom              phase['remaining_cost'] -= self.htick
-                # _mme loop_on_all_ebom              # increase working time for the worker
-                # _mme loop_on_all_ebom              worker_on_phase.working_hours += self.htick
-                # _mme loop_on_all_ebom          if __debug__: glog.debug("%s -    🐞 phase: %s.%s (remaining: %.2fh), active_worker:%s (worked: %.2fh), remaining_cost:%.1fs", self.cts, ebomid, phase['name'], phase['remaining_cost'], phase['active_worker'], (self.current_workers[worker_id]).working_hours, phase['remaining_cost'])
-
-                # _mme loop_on_all_ebom      # check if we can close this task
-                # _mme loop_on_all_ebom      if worker_id is not None and phase['remaining_cost'] <= 0:
-                # _mme loop_on_all_ebom          if __debug__: glog.debug("%s -    🛬 task: %s.%s completed by %s at %s", self.cts, ebomid, phase['name'], worker_id, format_time(self.current_time + conf.TICK))
-                # _mme loop_on_all_ebom          # finalize this task
-                # _mme loop_on_all_ebom          self.schedule_log_append(ebomid, phase, current_shift_num,
-                # _mme loop_on_all_ebom                  self.current_workers[worker_id].current_phase_start, 
-                # _mme loop_on_all_ebom                  (self.current_time + timedelta(hours=self.htick)))
-                # _mme loop_on_all_ebom          worker_ids_on_closed_phase_in_this_tick.append(worker_id)
-                # _mme loop_on_all_ebom          worker_on_phase.current_phase = None
-                # _mme loop_on_all_ebom          phase['active_worker'] = None
-                # _mme loop_on_all_ebom          # todo: check if this token is closed before the deadline
-                # _mme loop_on_all_ebom          # get next phase in this ebom
-                # _mme loop_on_all_ebom          ebom = next(e for e in self.eboms if e["id"] == ebomid)
-                # _mme loop_on_all_ebom          if len(ebom['phases']) > (phase['id'] + 1):
-                # _mme loop_on_all_ebom              phase = ebom['phases'][phase['id'] + 1]
-                # _mme loop_on_all_ebom          else:
-                # _mme loop_on_all_ebom              phase = None
-                # _mme loop_on_all_ebom          self.available_phases[ebomid] = phase  # update available phases
-
-                # _mme loop_on_all_ebom          # _mme finetuning
-                # _mme loop_on_all_ebom          # get phase with min id and min deadline
-                # _mme loop_on_all_ebom          #    min id == prefer an mbom over workinstruction and a workinstruction over routing
-                # _mme loop_on_all_ebom          for p, avphase in self.available_phases.items():
-                # _mme loop_on_all_ebom              if avphase != None:
-                # _mme loop_on_all_ebom                  if phase == None:
-                # _mme loop_on_all_ebom                      phase = avphase
-                # _mme loop_on_all_ebom                  else:
-                # _mme loop_on_all_ebom                      #if avphase['id'] < phase['id'] and avphase['deadline'] < phase['deadline']:
-                # _mme loop_on_all_ebom                      if avphase['deadline'] < phase['deadline']:
-                # _mme loop_on_all_ebom                          phase = avphase
-
-                # _mme loop_on_all_ebom      # check if we can assign the task to a worker
-                # _mme loop_on_all_ebom      this_task_can_be_assigned = self.task_can_be_assigned(phase)
-                # _mme loop_on_all_ebom      if this_task_can_be_assigned == 'ok':
-                # _mme loop_on_all_ebom          worker_id = self.get_first_available_worker_with_max_capacity(not_the_workers=worker_ids_on_closed_phase_in_this_tick, current_shift_num=current_shift_num)
-                # _mme loop_on_all_ebom          if worker_id is not None:
-                # _mme loop_on_all_ebom              # assign this task to a worker
-                # _mme loop_on_all_ebom              phase['remaining_cost'] -= self.htick
-                # _mme loop_on_all_ebom              phase['active_worker'] = worker_id
-                # _mme loop_on_all_ebom              worker_on_phase = self.current_workers[worker_id]
-                # _mme loop_on_all_ebom              if not isinstance(worker_on_phase, Worker):
-                # _mme loop_on_all_ebom                  glog.error("%s - Error, %s  that can be assigned is not of class Workers", self.cts, worker_id)
-                # _mme loop_on_all_ebom                  sys.exit(2)
-                # _mme loop_on_all_ebom              worker_on_phase.current_phase = f"{ebomid}.{phase['name']}"
-                # _mme loop_on_all_ebom              worker_on_phase.current_phase_start = self.current_time
-                # _mme loop_on_all_ebom              worker_on_phase.working_hours += self.htick
-                # _mme loop_on_all_ebom              if __debug__: glog.debug("%s -    👷 task: %s.%s (remaining: %.2fh) assigned to %s (worked: %.2fh) at %s", self.cts, ebomid, phase['name'], phase['remaining_cost'], phase['active_worker'], worker_on_phase.working_hours, format_time(self.current_time))
-                # _mme loop_on_all_ebom      else:
-                # _mme loop_on_all_ebom          if ebomid is not None  and phase is not None:
-                # _mme loop_on_all_ebom                  if __debug__: glog.debug("%s -    🐞 task: %s.%s cannot be assigned, reason: %s", self.cts, ebomid, phase['name'], this_task_can_be_assigned)
-                # _mme loop_on_all_ebom  ##################################
-
             is_shift_ending, shift_num = self.is_shift_end(self.current_time)
             if is_shift_ending:
                 if __debug__: glog.debug("%s - 🕒 %s - Shift %d end at  %s", self.cts, format_date(self.current_time), shift_num, format_time_only(self.current_time))
@@ -234,11 +171,13 @@ class PmasSimulator:
                 if self.current_day > self.get_max_mbom_deadline().date():
                     if len(self.get_uncompleted_mboms()) > 0:
                         if __debug__: glog.info("%s - ❌ %s - Simulation failed: NOT all MBOMs were completed before max mbom deadline %s", self.cts, format_time(self.current_time), format_time(self.get_max_mbom_deadline()))
+                        self.weblog(f"❌ {format_time(self.current_time)} - Simulation failed: NOT all MBOMs were completed before max mbom deadline {format_time(self.get_max_mbom_deadline())}")
                         simulation_failed = True
 
                 # we can check if all eboms are completed
                 if len(self.get_uncompleted_eboms()) == 0:
-                    if __debug__: glog.info("%s - ✅ %s - All EBOMs completed , simulation can end", self.cts, format_time(self.current_time))
+                    self.weblog(f"✅ {format_time(self.current_time)} - All EBOMs completed")
+                    break
                     self.assign_current_time(end_time)
 
             self.assign_current_time(self.current_time + conf.TICK)
@@ -375,9 +314,10 @@ class PmasSimulator:
                 if best_phase == None:
                     best_phase = phase
 
-                # _mme finetuning
+                # finetuning
                 # get phase with min id and min deadline
-                # we take min id because we prefer assigning mbom before workinstruction before routing also if they are available
+                # we take min id because we prefer assigning mbom before workinstruction 
+                #  and workinstruction before routing also if they are available
                 if phase['id'] < best_phase['id']:
                     # prefer min id
                     best_ebomid = ebomid
@@ -468,15 +408,6 @@ class PmasSimulator:
                     uncmboms.add(ebom["id"])
                     break
         return [ebom for ebom in self.eboms if ebom["id"] in uncmboms]
-    
-    def get_uncompleted_wi_routing(self):
-        uncompleted_wi_r = set()
-        for ebom in self.eboms:
-            for phase in ebom["phases"]:
-                if (phase["name"] == "workinstruction" or phase["name"] == "routing") and phase["remaining_cost"] > 0:
-                    uncompleted_wi_r.add(ebom["id"])
-                    break
-        return [ebom for ebom in self.eboms if ebom["id"] in uncompleted_wi_r]
 
 
     def is_shift_start(self, curtime):

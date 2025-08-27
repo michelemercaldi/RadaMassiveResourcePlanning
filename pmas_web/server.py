@@ -11,27 +11,31 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, HTTPException, Request, Response, Response, BackgroundTasks
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import HTTPException
+from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
+
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
-import asyncio, uuid
+import anyio, asyncio, uuid
+import pandas as pd
+import plotly.express as px
 
 from pmas_configuration import PmasConfiguration
 from pmas_sql import PmasSql
 from pmas_strategy import PmasStrategy
-from pmas_util import PmasLoggerSingleton, PmasLogBroker
-
+from pmas_util import PmasLoggerSingleton, PmasLogBroker, job_id_var
 
 
 app = FastAPI()
 
-# _mme  uses QUEUES directly;
-# _mme     QUEUES: dict[str, asyncio.Queue[str]] = {}
 
 # Allow frontend on port 3000
 origins = [
     "http://localhost:3000",
     # Add more allowed origins here (like production URL)
 ]
+#origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,6 +43,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -47,13 +52,14 @@ async def startup_event():
     """Code to run on application startup."""
     try:
         conf = PmasConfiguration()
-        log_dir = os.path.join(os.path.dirname(__file__), '../logs')
-        os.makedirs(log_dir, exist_ok=True)
-        conf.log_file_path = os.path.join(log_dir, 'pmas_web.log')
+        app.state.log_file_path = os.path.join(conf.base_dir, conf.log_file_path)
+        app.state.schedule_export_file_path = os.path.join(conf.base_dir, conf.schedule_export_file_path)
+        app.state.status_file_path = os.path.join(conf.base_dir, conf.status_file_path)
 
         # Initialize and store logger, sql client, and config in app.state
         app.state.glog = PmasLoggerSingleton.get_logger(conf)
         app.state.log_broker = PmasLogBroker(maxsize=2000)
+        app.state.log_broker.bind_loop(asyncio.get_running_loop())
         app.state.sql = PmasSql(conf)
         app.state.conf = conf
         app.state.simulations = {}
@@ -78,9 +84,19 @@ async def shutdown_event():
         if getattr(app.state, 'glog', None):
             app.state.glog.info("Application shutdown complete. DB connection closed.")
 
+
+# Add a safe-join helper (prevents .. path tricks)
+def _safe_join(base_dir: str, *parts: str) -> str:
+    base = os.path.realpath(base_dir)
+    path = os.path.realpath(os.path.join(base, *parts))
+    if os.path.commonpath([base, path]) != base:
+        raise HTTPException(status_code=400, detail="Invalid path.")
+    return path
+
+
 @app.get("/api/logs")
 async def get_logs(request: Request):
-    log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../logs', 'pmas_web.log')
+    log_file_path = app.state.log_file_path
     
     # Support range requests for tailing
     range_header = request.headers.get('Range')
@@ -187,28 +203,8 @@ def get_simulation_status(task_id: str, request: Request):
     if not simulation_state:
         raise HTTPException(status_code=404, detail="Simulation task not found.")
     
-    # _mme glog.info(f"Polling for task {task_id}, status is {simulation_state['status']}")
+    # "trace debug" :  glog.info(f"Polling for task {task_id}, status is {simulation_state['status']}")
     return simulation_state
-
-def run_simulation_logic_threaded(task_id: str, app_state, user_input_data: dict):
-    """The actual simulation logic that runs in a background thread."""
-    try:
-        conf = PmasConfiguration() 
-        strategy = PmasStrategy(conf) 
-        
-        app_state.glog.info(f"Starting background simulation for task: {task_id}")
-        strategy.exec_simulation_logic(user_input_data)
-        
-        result = {"result": "Simulation executed successfully", "output": "fake_simulation_result"}
-        app_state.simulations[task_id] = {"status": "completed", "result": result}
-        app_state.glog.info(f"Simulation task {task_id} completed successfully.")
-
-    except Exception as e:
-        error_message = f"Simulation task {task_id} failed: {e}"
-        app_state.glog.error(error_message)
-        app_state.glog.error(traceback.format_exc())
-        app_state.simulations[task_id] = {"status": "failed", "result": {"detail": error_message}}
-
 
 def transform_web_input_to_simulator_format(web_input):
     transformed = {
@@ -227,107 +223,137 @@ def transform_web_input_to_simulator_format(web_input):
     
     # Convert shifts
     for shift_num, shift_data in web_input['shifts'].items():
+        start = shift_data['start']
+        if isinstance(start, str):
+            start = datetime.strptime(start, '%H:%M')  # it should be already in "%H:%M" format
+        start_str = start.strftime('%H:%M')
         transformed['shift_config'][shift_num] = {
-            'start': shift_data['start'].strftime('%H:%M'),
+            'start': start_str,
             'duration': shift_data['duration']
         }
-    
     # Convert casse production dates
     for cassa, date_obj in web_input['casse_production_dates'].items():
+        if isinstance(date_obj, str):
+            date_obj = datetime.strptime(date_obj, '%Y-%m-%dT%H:%M:%S.%fZ')  # expected iso format
         transformed['casse_production_dates'][cassa] = date_obj.strftime('%Y-%m-%d')
     
     return transformed
 
 
 
-#  _mme ori with actual simulation run:
-#@app.post("/api/run_simulation")
-#def run_simulation(data: SimulationInput, request: Request):
-#    """Runs the simulation with the provided input data."""
-#    glog = request.app.state.glog
-#    if not glog:
-#        raise HTTPException(status_code=503, detail="Application is not initialized correctly. Check server logs.")
-#
-#    task_id = str(uuid.uuid4())
-#    request.app.state.simulations[task_id] = {"status": "running", "result": None}
-#    
-#    web_user_input = data.dict()
-#    user_input = transform_web_input_to_simulator_format(web_user_input)
-#    
-#    glog.info(f"Queuing simulation task {task_id} with input: {user_input}")
-#
-#    thread = threading.Thread(target=run_simulation_logic_threaded, args=(task_id, request.app.state, user_input))
-#    thread.start()
-#
-#    return Response(status_code=202, content=f'{{"message": "Simulation started", "task_id": "{task_id}"}}', media_type="application/json")
 
+"""
+Concurrency: the code handles multiple simultaneous requests by spawning a new thread for each simulation.
+Thread Safety: we use put_threadsafe and done_threadsafe to avoid race conditions.
+Scalability: Works well for moderate load, but may need a task queue for high scalability.
 
-# _mme  run_simulation test that uses QUEUES directly,
-#    without the instance of the custom log broker
-# with_QUEUES : @app.post("/api/run_simulation")
-# with_QUEUES : async def run_simulation(payload: dict, background: BackgroundTasks):
-# with_QUEUES :     job_id = uuid.uuid4().hex
-# with_QUEUES :     QUEUES[job_id] = asyncio.Queue(maxsize=1000)
-# with_QUEUES :     await app.state.log_broker.ensure(job_id)
-# with_QUEUES :     background.add_task(simulation_task, job_id, payload)
-# with_QUEUES :     return {"job_id": job_id}
+Each call to run_simulation_logic_threaded spawns a new thread for _simulation_blocking_worker.
+Multiple requests result in multiple threads running concurrently.
+The number of concurrent threads is limited by the thread pool (managed by anyio/ASGI server).
 
-
+    summary table:
+"Component",                      "Runs In",        "Concurrency Model",   "Blocking?",    "Notes"
+"run_simulation (endpoint)",      "Event loop",     "Async",                 "No",         "Schedules background task."
+"run_simulation_logic_threaded",  "Event loop",     "Async",                 "No",         "Offloads work to thread."
+"_simulation_blocking_worker",    "OS Thread",      "Thread pool",           "Yes",        "CPU-bound/blocking work happens here."
+"app.state.simulations",          "Event loop",     "Async",                 "No",         "Shared state, updated safely."
+"""
 @app.post("/api/run_simulation")
-async def run_simulation(payload: dict, background: BackgroundTasks):
+async def run_simulation(payload: dict, background: BackgroundTasks, request: Request):
+    glog = request.app.state.glog
+    if not glog:
+        raise HTTPException(status_code=503, detail="Application is not initialized correctly. Check server logs.")
+    #glog.info(f"Received simulation request with payload: {payload}")
+    user_input = transform_web_input_to_simulator_format(payload)
+    glog.info(f"run_simulation received user input: {user_input}")
+    
     job_id = uuid.uuid4().hex
+    # Set context so any logs *before* scheduling also include the job_id
+    job_id_var.set(job_id)
+    
+    request.app.state.simulations[job_id] = {"status": "running", "result": None}
+    glog.info(f"run_simulation queuing simulation task {job_id} with input: {user_input}")
+    
     await app.state.log_broker.ensure(job_id)
-    background.add_task(simulation_task, job_id, app.state.log_broker, payload)
+    #background.add_task(run_simulation_logic_test_just_write_logs, job_id, user_input)
+    background.add_task(run_simulation_logic_threaded, job_id, user_input)
     return {"job_id": job_id}
 
 
-# _mme  simulation_task that uses QUEUES directly,
-# with_QUEUES : async def simulation_task(job_id: str, payload: dict):
-# with_QUEUES :     q = QUEUES[job_id]
-# with_QUEUES :     try:
-# with_QUEUES :         # emit logs while working
-# with_QUEUES :         for i in range(100):
-# with_QUEUES :             await q.put(f"[{i}] working with {payload.get('id_progetto')}")
-# with_QUEUES :             await asyncio.sleep(0.5)
-# with_QUEUES :         await q.put("__DONE__")
-# with_QUEUES :     finally:
-# with_QUEUES :         await asyncio.sleep(0)  # let last message flush
+def _simulation_blocking_worker(job_id: str, app_state, user_input_data: dict):
+    """
+    Runs in a real OS thread (not the event loop). NO awaits here.
+    Performs CPU-bound/blocking work (e.g., strategy.exec_simulation_logic).
+    Use log_broker.put_threadsafe(...) / done_threadsafe(...) to stream logs.
+    """
+    job_id_var.set(job_id)
+    log_broker: PmasLogBroker = app_state.log_broker
+    try:
+        log_broker.put_threadsafe(job_id, "starting…")
+        app_state.glog.info("job %s: starting…", job_id)
+
+        # --- blocking / CPU-bound work below ---
+        conf = PmasConfiguration()
+        strategy = PmasStrategy(conf)
+        app_state.glog.info("job %s: executing simulation", job_id)
+
+        user_input_data['job_id'] = job_id
+        strategy.exec_simulation_logic(user_input_data, log_broker)  # BLOCKING call
+        result = {"result": "Simulation executed successfully", "output": "fake_simulation_result"}
+
+        log_broker.put_threadsafe(job_id, "finished work")
+        app_state.glog.info("job %s: finished work", job_id)
+
+        # return outcome for the async wrapper to persist
+        return ("completed", result)
+
+    except Exception as e:
+        msg = f"ERROR: {type(e).__name__}: {e}"
+        log_broker.put_threadsafe(job_id, msg)
+        app_state.glog.exception("job %s failed", job_id)
+        app_state.glog.error(msg)
+        app_state.glog.error(traceback.format_exc())
+        app_state.simulations[job_id] = {"status": "failed", "result": {"detail": msg}}
+        return ("failed", {"detail": str(e)})
+    finally:
+        # Always close the SSE stream
+        log_broker.done_threadsafe(job_id)
 
 
-# test simulation_task,   just write some logs to for the client
-async def simulation_task(job_id: str, broker: PmasLogBroker, payload: dict):
+async def run_simulation_logic_threaded(job_id: str, user_input_data: dict):
+    """
+    Async wrapper: offloads the blocking worker to a thread, then persists status.
+    This function runs in the event loop (non-blocking).
+    It immediately offloads the blocking work to a thread using anyio.to_thread.run_sync(...)
+    """
+    job_id_var.set(job_id)
+    # anyio.to_thread.run_sync schedules _simulation_blocking_worker to run in a separate OS thread
+    status, result = await anyio.to_thread.run_sync(
+        _simulation_blocking_worker, job_id, app.state, user_input_data
+    )
+    # Persist status/result back on the event loop thread
+    app.state.simulations[job_id] = {"status": status, "result": result}
+
+
+# test simulation task,   just write some logs to the client
+async def run_simulation_logic_test_just_write_logs(job_id: str, payload: dict):
     try:
         # emit logs while working
-        await broker.put(job_id, "starting…")
+        log_broker : PmasLogBroker = app.state.log_broker
+        await log_broker.put(job_id, "starting…")
         for i in range(30):
-            await broker.put(job_id, f"[{i}] working with {payload.get('id_progetto')}")
-            app.state.glog.info(f"[{job_id}] working with {payload.get('id_progetto')}")
+            await log_broker.put(job_id, f"[{i}] working with {payload.get('id_progetto')}")
+            #app.state.glog.info(f"[{job_id}] working with {payload.get('id_progetto')}")
             await asyncio.sleep(0.5)
+        await log_broker.put(job_id, "finished work")
+    except Exception as e:
+        try:
+            await log_broker.put(job_id, f"ERROR: {type(e).__name__}: {e}")
+        finally:
+            log_broker.exception("job %s failed", job_id)
     finally:
-        await broker.done(job_id)  # send the "__DONE__" sentinel
+        await log_broker.done(job_id)  # send the "__DONE__" sentinel
 
-
-# _mme  stream_logs that uses QUEUES directly,
-#      without the instance of the custom log broker
-# with_QUEUES : @app.get("/api/run_simulation/{job_id}/logs")
-# with_QUEUES : async def stream_logs(job_id: str):
-# with_QUEUES :     q = QUEUES.get(job_id)
-# with_QUEUES :     if not q:
-# with_QUEUES :         async def _empty():
-# with_QUEUES :             yield {"event":"error","data":"unknown job"}
-# with_QUEUES :         return EventSourceResponse(_empty(), ping=15000)
-# with_QUEUES : 
-# with_QUEUES :     async def event_gen():
-# with_QUEUES :         try:
-# with_QUEUES :             while True:
-# with_QUEUES :                 line = await q.get()
-# with_QUEUES :                 if line == "__DONE__":
-# with_QUEUES :                     yield {"event":"done", "data":"ok"}
-# with_QUEUES :                     break
-# with_QUEUES :                 yield {"event":"log", "data": line}
-# with_QUEUES :         finally:
-# with_QUEUES :             QUEUES.pop(job_id, None)
-# with_QUEUES :     return EventSourceResponse(event_gen(), ping=15000)  # keep-alive pings
 
 
 @app.get("/api/run_simulation/{job_id}/logs")
@@ -352,35 +378,77 @@ async def stream_logs(job_id: str):
     return EventSourceResponse(event_gen(), ping=15000)
 
 
-#Now from any module you can write logs:
-#
-## some_module.py
-#async def step_x(job_id: str, broker: LogBroker):
-#    await broker.put(job_id, "step X started")
-#    # ...
-#
-#
-#If you don’t have easy access to app.state in deep modules, expose a tiny accessor:
-#
-## appctx.py
-#from typing import Optional
-#from broker import LogBroker
-#_broker: Optional[LogBroker] = None
-#def set_broker(b: LogBroker):  # call this in lifespan
-#    global _b; _b = b
-#def get_broker() -> LogBroker:
-#    assert _b is not None, "broker not initialized"
-#    return _b
-#
-#Then anywhere: await get_broker().put(job_id, "msg").
-#
-# Tip: if you log from threads, use loop.call_soon_threadsafe(q.put_nowait, line); 
-# or make your broker provide a put_threadsafe wrapper.
+@app.get("/api/download/log")
+def download_log(request: Request):
+    log_path = request.app.state.conf.log_file_path
+    if not log_path or not os.path.exists(log_path):
+        raise HTTPException(status_code=404, detail="Log file not found.")
+    filename = os.path.basename(log_path)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    }
+    return FileResponse(
+        log_path,
+        media_type="text/plain",
+        filename=filename,
+        headers=headers
+    )
+
+
+@app.get("/api/download/{job_id}/simresult")
+def download_simresult(job_id: str, request: Request):
+    base, ext = os.path.splitext(request.app.state.conf.schedule_export_file_path)
+    simresult_path = f"{base}.{job_id}{ext}"
+    if not simresult_path or not os.path.exists(simresult_path):
+        raise HTTPException(status_code=404, detail="Log file not found.")
+    filename = os.path.basename(simresult_path)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    }
+    return FileResponse(
+        simresult_path,
+        media_type="text/plain",
+        filename=filename,
+        headers=headers
+    )
 
 
 
+# server gantt visualization
+def generate_gantt_chart(csv_path):
+    df = pd.read_csv(csv_path, delimiter=';')
+    df["phase"] = df["task"].apply(lambda x: x.split('.')[-1] if '.' in x else 'mbom')
+    df["ebom"] = df["task"].apply(lambda x: x.split('.')[0])
+    df["start"] = pd.to_datetime(df["start"])
+    df["end"] = pd.to_datetime(df["end"])
+    df.sort_values(by=["worker", "phase", "start"], inplace=True)
+    phase_colors = {
+        "mbom": "blue",
+        "workinstruction": "orange",
+        "routing": "green"
+    }
+    df['color'] = df['phase'].map(phase_colors)
+    fig = px.timeline(
+        df,
+        x_start="start",
+        x_end="end",
+        y="worker",
+        color="phase",
+        hover_data=["ebom", "phase"],
+        title="Resource Scheduling Gantt Chart"
+    )
+    fig.update_yaxes(categoryorder="total ascending")
+    return fig.to_html(include_plotlyjs='cdn')
 
 
+@app.get("/api/{job_id}/gantt", response_class=HTMLResponse)
+async def get_gantt_chart(job_id: str, request: Request):
+    base, ext = os.path.splitext(request.app.state.conf.schedule_export_file_path)
+    csv_path = f"{base}.{job_id}{ext}"
+    if not os.path.exists(csv_path):
+        return {"error": "CSV file not found"}, 404
+    gantt_html = generate_gantt_chart(csv_path)
+    return HTMLResponse(content=gantt_html, status_code=200)
 
 
 

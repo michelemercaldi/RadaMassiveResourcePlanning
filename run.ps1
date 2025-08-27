@@ -14,12 +14,13 @@ Write-Host "You entered: '$Action'"
 function Run-Web-Server {
     cd $scriptDir
     poetry run uvicorn pmas_web.server:app --host 0.0.0.0 --port 8000 --reload
+    #set PYTHONUNBUFFERED=1 & poetry run uvicorn pmas_web.server:app --host 0.0.0.0 --port 8000 --reload
 }
 
 
 function Continuous-CLI {
     $curl= "curl"
-    $curlcmd = ".\.venv\Scripts\python.exe .\pianificazione\pianificazione_massiva.py"
+    $curlcmd = ".\.venv\Scripts\python.exe pianificazione_massiva.py"
     #$cmd2 = ".\.venv\Scripts\python.exe .\pianificazione\pianificazione_massiva_visualizer_YW.py"
     $response_in_json = $false
 
